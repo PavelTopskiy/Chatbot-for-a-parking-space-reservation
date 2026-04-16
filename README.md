@@ -84,7 +84,7 @@ Central** parking facility. Built with **LangChain**, **LangGraph**,
 │   ├── notifications.py         # In-app + email notification service
 │   ├── server.py                # FastAPI: REST API + admin dashboard
 │   ├── reservation_writer.py    # Pure file-write logic (no external deps)
-│   ├── mcp_server.py            # MCP server (SSE, port 8001, bearer auth)
+│   ├── mcp_server.py            # MCP server (JSON-RPC, port 8001, bearer auth)
 │   └── mcp_client.py            # Sync MCP client used by approval paths
 ├── eval/
 │   ├── questions.json           # gold QA set with topic labels
@@ -260,7 +260,7 @@ python3 -m eval.evaluate --end-to-end      # full chatbot turns
          │
          ▼
   mcp_client.write_confirmed_reservation(booking)
-         │  (SSE + Bearer token)
+         │  (POST /mcp JSON-RPC + Bearer token)
          ▼
   MCP Server  (src/mcp_server.py, port 8001)
   ┌──────────────────────────────────────────┐
