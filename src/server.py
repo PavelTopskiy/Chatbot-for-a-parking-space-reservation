@@ -9,7 +9,7 @@ Endpoints:
   Admin REST API:
     GET  /api/admin/bookings              — list bookings (filter by status)
     GET  /api/admin/bookings/{id}         — inspect one booking
-    POST /api/admin/bookings/{id}/approve — approve a pending booking
+    POST /api/admin/bookings/{id}/approve — approve + MCP write
     POST /api/admin/bookings/{id}/reject  — reject a pending booking
     GET  /api/admin/notifications         — list notifications
     POST /api/admin/chat                  — talk to the admin agent
@@ -23,6 +23,7 @@ Run::
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Optional
 
@@ -34,8 +35,11 @@ from . import db
 from . import notifications as notif
 from .admin_agent import admin_chat
 from .chatbot import chat
+from .mcp_client import write_confirmed_reservation as mcp_write
 
-app = FastAPI(title="SkyPark Central Parking Chatbot", version="2.0")
+log = logging.getLogger(__name__)
+
+app = FastAPI(title="SkyPark Central Parking Chatbot", version="3.0")
 
 
 # ---------- request/response models ----------
@@ -100,8 +104,11 @@ def approve_booking(booking_id: int, req: ApproveRequest):
     if not ok:
         raise HTTPException(400, "Booking not found or not pending")
     booking = db.get_booking(booking_id)
+    # Stage 3: write confirmed reservation to file via MCP server
+    mcp_result = mcp_write(booking)
+    log.info("MCP result for booking #%s: %s", booking_id, mcp_result)
     notif.notify_booking_confirmed(booking)
-    return {"status": "confirmed", "booking": booking}
+    return {"status": "confirmed", "booking": booking, "mcp": mcp_result}
 
 
 @app.post("/api/admin/bookings/{booking_id}/reject")

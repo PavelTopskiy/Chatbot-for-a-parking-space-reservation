@@ -19,6 +19,7 @@ import sys
 from . import db
 from . import notifications as notif
 from .admin_agent import admin_chat
+from .mcp_client import write_confirmed_reservation as mcp_write
 
 
 BANNER = """\
@@ -63,8 +64,11 @@ def main() -> int:
             ok = db.approve_booking(bid, admin_notes=notes)
             if ok:
                 booking = db.get_booking(bid)
+                # Stage 3: write to file via MCP server
+                mcp_result = mcp_write(booking)
                 notif.notify_booking_confirmed(booking)
                 print(f"  Reservation #{bid} CONFIRMED.")
+                print(f"  MCP: {mcp_result}")
             else:
                 print(f"  Could not approve #{bid} (not found or not pending).")
             continue

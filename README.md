@@ -1,4 +1,4 @@
-# Parking Chatbot — Stage 1 + Stage 2
+# Parking Chatbot — Stage 1 + Stage 2 + Stage 3
 
 A Retrieval-Augmented Generation (RAG) chatbot for the fictional **SkyPark
 Central** parking facility. Built with **LangChain**, **LangGraph**,
@@ -7,6 +7,7 @@ Central** parking facility. Built with **LangChain**, **LangGraph**,
 - **Stage 1** — RAG chatbot, vector + SQL data split, guardrails, evaluation
 - **Stage 2** — Human-in-the-loop reservation approval with admin agent,
   REST API, dashboard, and email notifications
+- **Stage 3** — MCP server that writes confirmed reservations to a file
 
 ---
 
@@ -81,7 +82,10 @@ Central** parking facility. Built with **LangChain**, **LangGraph**,
 │   ├── admin_agent.py           # Admin-facing LangGraph agent (6 tools)
 │   ├── admin_cli.py             # Admin interactive REPL
 │   ├── notifications.py         # In-app + email notification service
-│   └── server.py                # FastAPI: REST API + admin dashboard
+│   ├── server.py                # FastAPI: REST API + admin dashboard
+│   ├── reservation_writer.py    # Pure file-write logic (no external deps)
+│   ├── mcp_server.py            # MCP server (SSE, port 8001, bearer auth)
+│   └── mcp_client.py            # Sync MCP client used by approval paths
 ├── eval/
 │   ├── questions.json           # gold QA set with topic labels
 │   └── evaluate.py              # Recall@K, Precision@K, MRR, latency
@@ -243,6 +247,89 @@ python3 -m pytest tests/
 ```bash
 python3 -m eval.evaluate                   # retrieval-only
 python3 -m eval.evaluate --end-to-end      # full chatbot turns
+```
+
+---
+
+## Stage 3: MCP Server
+
+### Architecture
+
+```
+  Admin approves reservation
+         │
+         ▼
+  mcp_client.write_confirmed_reservation(booking)
+         │  (SSE + Bearer token)
+         ▼
+  MCP Server  (src/mcp_server.py, port 8001)
+  ┌──────────────────────────────────────────┐
+  │  BearerAuthMiddleware                    │
+  │  → validates Authorization: Bearer TOKEN │
+  │                                          │
+  │  Tool: write_confirmed_reservation       │
+  │  → delegates to reservation_writer.py   │
+  │  → fcntl file lock                      │
+  │  → appends to confirmed_reservations.txt │
+  └──────────────────────────────────────────┘
+         │
+         ▼
+  data/confirmed_reservations.txt
+  Name | Car Number | Reservation Period | Approval Time
+```
+
+### File format
+
+```
+Ivan Petrenko | AA1234BB | 2026-04-20T09:00 - 2026-04-20T18:00 | 2026-04-20T08:30:00Z
+Anna Koval    | BB5678CC | 2026-04-21T10:00 - 2026-04-21T17:00 | 2026-04-21T09:15:00Z
+```
+
+### Running the MCP server
+
+Start it **before** the admin dashboard (it runs on port 8001):
+
+```bash
+# Terminal 3
+source .venv/bin/activate
+python3 -m src.mcp_server
+```
+
+```
+INFO: Starting SkyPark MCP server on 0.0.0.0:8001
+INFO: Reservations file: .../data/confirmed_reservations.txt
+INFO: Auth: enabled
+```
+
+Now when an admin approves a reservation (via dashboard, admin CLI, or admin
+agent), the MCP client is called automatically and the entry is written.
+
+### Security
+
+- Every request to the MCP server must include `Authorization: Bearer <MCP_SECRET>`.
+- The secret is set via the `MCP_SECRET` env var (default in `.env.example` is
+  a placeholder — **change it before deploying**).
+- Requests without a valid token receive HTTP 401.
+- All input fields are sanitised (pipe characters replaced with `/`) before
+  writing to prevent format injection.
+- File writes use `fcntl.flock` exclusive locking to prevent race conditions.
+
+### Complete 3-server workflow
+
+| Terminal | Command | Purpose |
+|---|---|---|
+| 1 | `python3 -m src.mcp_server` | MCP server (port 8001) |
+| 2 | `python3 -m src.server`     | REST API + dashboard (port 8000) |
+| 3 | `python3 -m src.cli`        | User chatbot REPL |
+
+Or use the admin CLI instead of the dashboard:
+```bash
+python3 -m src.admin_cli   # /approve, /reject, /pending
+```
+
+After approval, check the output file:
+```bash
+cat data/confirmed_reservations.txt
 ```
 
 ---

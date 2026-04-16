@@ -26,6 +26,7 @@ from langgraph.prebuilt import create_react_agent
 from . import db
 from . import notifications as notif
 from .config import settings
+from .mcp_client import write_confirmed_reservation as mcp_write
 
 
 ADMIN_SYSTEM_PROMPT = """\
@@ -108,8 +109,10 @@ def approve_reservation(booking_id: int, notes: Optional[str] = None) -> str:
     if not ok:
         return f"Could not approve #{booking_id} — it may not exist or is not pending."
     booking = db.get_booking(booking_id)
+    # Stage 3: persist to file via MCP server
+    mcp_result = mcp_write(booking)
     notif.notify_booking_confirmed(booking)
-    return f"Reservation #{booking_id} is now CONFIRMED."
+    return f"Reservation #{booking_id} is now CONFIRMED. MCP: {mcp_result}"
 
 
 @tool
