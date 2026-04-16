@@ -1,0 +1,20 @@
+[
+  {"q": "Where is SkyPark Central located?", "gold_topics": ["location", "general"]},
+  {"q": "What is the address of the parking garage?", "gold_topics": ["location"]},
+  {"q": "How do I get to SkyPark from the airport by train?", "gold_topics": ["location"]},
+  {"q": "Is there a shuttle to the train station?", "gold_topics": ["location", "general"]},
+  {"q": "How many parking spaces does the garage have?", "gold_topics": ["general"]},
+  {"q": "Do you have EV chargers?", "gold_topics": ["general", "faq"]},
+  {"q": "My SUV is 2.4 meters tall, where can I park?", "gold_topics": ["general", "policies", "faq"]},
+  {"q": "Are there accessible parking spots?", "gold_topics": ["general", "faq", "policies"]},
+  {"q": "Is the garage open at 3am on a Sunday?", "gold_topics": ["faq", "hours_pricing"]},
+  {"q": "What information do you need to make a reservation?", "gold_topics": ["booking"]},
+  {"q": "What is your cancellation policy?", "gold_topics": ["booking"]},
+  {"q": "Can I modify a reservation after I made it?", "gold_topics": ["booking"]},
+  {"q": "What happens if I lose my parking ticket?", "gold_topics": ["policies", "faq"]},
+  {"q": "Are commercial trucks allowed in the garage?", "gold_topics": ["policies"]},
+  {"q": "Is smoking allowed inside the parking garage?", "gold_topics": ["policies"]},
+  {"q": "How fast am I allowed to drive inside the garage?", "gold_topics": ["policies"]},
+  {"q": "Is the parking garage safe at night?", "gold_topics": ["faq", "general"]},
+  {"q": "How does the booking confirmation flow work?", "gold_topics": ["booking"]}
+]
