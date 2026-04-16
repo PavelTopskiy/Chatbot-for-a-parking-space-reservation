@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from . import db
+from . import notifications as notif
 from .config import settings
 from .guardrails import sanitize_input, sanitize_output
 from .retriever import get_retriever
@@ -48,6 +49,8 @@ Tool-use rules:
     last name, license plate, and a start *and* end date/time. If any field
     is missing, ask the guest for it. Do not invent values. After the
     booking is staged, tell the guest it is pending administrator review.
+  - If the guest asks about the status of their reservation, use
+    ``check_reservation_status`` with the booking ID.
 
 Safety rules:
   - Do not ask for, store, or repeat sensitive personal data beyond what is
@@ -160,10 +163,31 @@ def create_reservation(
         start_ts=start_ts,
         end_ts=end_ts,
     )
+    # Notify the admin agent about the new reservation.
+    booking = db.get_booking(booking_id)
+    notif.notify_new_reservation(booking)
     return (
         f"Reservation #{booking_id} staged as PENDING. "
-        "An administrator will review and confirm shortly."
+        "The administrator has been notified and will review it shortly."
     )
+
+
+@tool
+def check_reservation_status(booking_id: int) -> str:
+    """Check the current status of a reservation by its ID.
+
+    Returns the status (pending / confirmed / rejected) and any admin notes.
+    """
+    b = db.get_booking(booking_id)
+    if not b:
+        return f"Reservation #{booking_id} not found."
+    status = b["status"].upper()
+    msg = f"Reservation #{b['id']}: {status}"
+    if b.get("admin_notes"):
+        msg += f"\nAdmin notes: {b['admin_notes']}"
+    if b.get("reviewed_at"):
+        msg += f"\nReviewed at: {b['reviewed_at']}"
+    return msg
 
 
 TOOLS = [
@@ -172,6 +196,7 @@ TOOLS = [
     get_pricing,
     check_availability,
     create_reservation,
+    check_reservation_status,
 ]
 
 

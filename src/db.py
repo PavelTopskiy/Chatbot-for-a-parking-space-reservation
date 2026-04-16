@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS bookings (
     car_plate TEXT NOT NULL,
     start_ts TEXT NOT NULL,
     end_ts TEXT NOT NULL,
-    status TEXT NOT NULL,         -- pending | confirmed | cancelled
+    status TEXT NOT NULL,         -- pending | confirmed | rejected
+    admin_notes TEXT,             -- optional reason for rejection / notes
+    reviewed_at TEXT,             -- ISO timestamp when admin acted
     created_at TEXT NOT NULL
 );
 """
@@ -201,6 +203,38 @@ def list_bookings(status: str | None = None) -> list[dict]:
                 "SELECT * FROM bookings ORDER BY id DESC"
             ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_booking(booking_id: int) -> dict | None:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM bookings WHERE id = ?", (booking_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def approve_booking(booking_id: int, admin_notes: str = "") -> bool:
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _conn() as con:
+        cur = con.execute(
+            """UPDATE bookings
+               SET status = 'confirmed', admin_notes = ?, reviewed_at = ?
+               WHERE id = ? AND status = 'pending'""",
+            (admin_notes, now, booking_id),
+        )
+        return cur.rowcount > 0
+
+
+def reject_booking(booking_id: int, admin_notes: str = "") -> bool:
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _conn() as con:
+        cur = con.execute(
+            """UPDATE bookings
+               SET status = 'rejected', admin_notes = ?, reviewed_at = ?
+               WHERE id = ? AND status = 'pending'""",
+            (admin_notes, now, booking_id),
+        )
+        return cur.rowcount > 0
 
 
 if __name__ == "__main__":
