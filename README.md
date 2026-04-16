@@ -1,57 +1,66 @@
-# Parking Chatbot — Stage 1
+# Parking Chatbot — Stage 1 + Stage 2
 
 A Retrieval-Augmented Generation (RAG) chatbot for the fictional **SkyPark
 Central** parking facility. Built with **LangChain**, **LangGraph**,
 **Pinecone**, and **OpenAI GPT**.
 
-This repository implements **Stage 1** of the project: a working chatbot that
-answers questions about the facility, queries live operational data, stages
-reservations for human-in-the-loop approval, applies safety guardrails to
-input and output, and ships with an evaluation harness.
+- **Stage 1** — RAG chatbot, vector + SQL data split, guardrails, evaluation
+- **Stage 2** — Human-in-the-loop reservation approval with admin agent,
+  REST API, dashboard, and email notifications
 
 ---
 
 ## Architecture
 
 ```
-                      ┌──────────────────────────┐
-        user input -> │  guardrails.sanitize_in  │ -> blocked? -> refusal
-                      └──────────────┬───────────┘
-                                     │ (cleaned text)
-                                     ▼
-                      ┌──────────────────────────┐
-                      │   LangGraph ReAct agent  │ <— OpenAI GPT
-                      │      (chatbot.py)        │
-                      └──────────────┬───────────┘
-                                     │ tool calls
-       ┌─────────────────────────────┼────────────────────────────────┐
-       ▼                             ▼                                ▼
-┌──────────────┐         ┌──────────────────────┐         ┌────────────────────┐
-│  Pinecone    │         │  SQLite (db.py)       │         │ create_reservation │
-│ vector store │         │  hours / pricing /    │         │  -> bookings table │
-│ (static MD)  │         │  spots availability   │         │   status=pending   │
-└──────────────┘         └──────────────────────┘         └────────────────────┘
-       ▲                                                          (HITL → Stage 2)
-       │ ingest.py
-┌──────────────┐
-│ data/static/ │  ← markdown KB (general, location, booking, policies, hours, FAQ)
-└──────────────┘
-
-                                     │
-                                     ▼
-                      ┌──────────────────────────┐
-                      │ guardrails.sanitize_out  │
-                      └──────────────┬───────────┘
-                                     ▼
-                                  reply
+  ┌─────────────────────────────────────────────────────────┐
+  │                    USER SIDE                             │
+  │                                                         │
+  │  user ──> guardrails ──> User Agent (chatbot.py)        │
+  │                          6 tools:                       │
+  │                          - search_parking_info (RAG)    │
+  │                          - get_working_hours (SQL)      │
+  │                          - get_pricing (SQL)            │
+  │                          - check_availability (SQL)     │
+  │                          - create_reservation (SQL)  ───┼──> notifications.py
+  │                          - check_reservation_status     │        │
+  │           guardrails <── reply                          │        │
+  └─────────────────────────────────────────────────────────┘        │
+                                                                     │
+                                                            ┌────────▼────────┐
+                                                            │  Notification   │
+                                                            │  in-app + email │
+                                                            └────────┬────────┘
+                                                                     │
+  ┌──────────────────────────────────────────────────────────────────┐│
+  │                    ADMIN SIDE                                    ││
+  │                                                                 ││
+  │  ┌─────────────────────────┐    ┌───────────────────────────┐   ││
+  │  │  Admin Dashboard (HTML) │    │  Admin CLI (admin_cli.py) │   ││
+  │  │  GET /admin             │    │  /pending /approve /reject│   ││
+  │  └──────────┬──────────────┘    └──────────┬────────────────┘   ││
+  │             │                              │                    ││
+  │             ▼                              ▼                    ││
+  │  ┌──────────────────────────────────────────────────────┐       ││
+  │  │          FastAPI Server (server.py)                   │<─────┘│
+  │  │  POST /api/admin/bookings/{id}/approve               │       │
+  │  │  POST /api/admin/bookings/{id}/reject                │       │
+  │  │  POST /api/admin/chat  ──> Admin Agent                │       │
+  │  └──────────────────────────────────────────────────────┘       │
+  │                                    │                            │
+  │               Admin Agent (admin_agent.py)                      │
+  │               6 tools: list_pending, inspect, availability,     │
+  │                        approve, reject, view_notifications      │
+  └─────────────────────────────────────────────────────────────────┘
+                                    │
+                           ┌────────▼────────┐
+                           │     SQLite      │
+                           │  bookings table │
+                           │  status: pending│
+                           │  → confirmed    │
+                           │  → rejected     │
+                           └─────────────────┘
 ```
-
-**Static vs dynamic split** (the brief's optional improvement):
-- **Static** facility info (location, amenities, policies, booking process,
-  FAQ) lives in `data/static/*.md` and is embedded into Pinecone.
-- **Dynamic** operational data (working hours, prices, live availability,
-  bookings) lives in SQLite at `data/dynamic/parking.db`. Tools query it
-  directly so answers are always fresh.
 
 ---
 
@@ -60,21 +69,19 @@ input and output, and ships with an evaluation harness.
 ```
 ├── data/
 │   ├── static/                  # markdown KB → vector store
-│   │   ├── general.md
-│   │   ├── location.md
-│   │   ├── booking_process.md
-│   │   ├── policies.md
-│   │   ├── hours_and_pricing_overview.md
-│   │   └── faq.md
 │   └── dynamic/                 # SQLite db (created on first run)
 ├── src/
 │   ├── config.py                # env-var settings
-│   ├── db.py                    # SQLite schema + seed + read helpers
+│   ├── db.py                    # SQLite schema + booking management
 │   ├── guardrails.py            # PII / secret / prompt-injection filter
 │   ├── ingest.py                # markdown → Pinecone upsert
 │   ├── retriever.py             # cached vector-store retriever
-│   ├── chatbot.py               # LangGraph ReAct agent + tools
-│   └── cli.py                   # interactive REPL
+│   ├── chatbot.py               # User-facing LangGraph agent (6 tools)
+│   ├── cli.py                   # User interactive REPL
+│   ├── admin_agent.py           # Admin-facing LangGraph agent (6 tools)
+│   ├── admin_cli.py             # Admin interactive REPL
+│   ├── notifications.py         # In-app + email notification service
+│   └── server.py                # FastAPI: REST API + admin dashboard
 ├── eval/
 │   ├── questions.json           # gold QA set with topic labels
 │   └── evaluate.py              # Recall@K, Precision@K, MRR, latency
@@ -88,142 +95,155 @@ input and output, and ships with an evaluation harness.
 
 ## Setup
 
-### 1. Create a virtual environment and install deps
+### 1. Virtual environment
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure credentials
+### 2. Credentials
 
 ```bash
 cp .env.example .env
-# then edit .env and fill in:
-#   OPENAI_API_KEY=...
-#   PINECONE_API_KEY=...
+# Edit .env and fill in OPENAI_API_KEY and PINECONE_API_KEY
 ```
 
-The defaults in `.env.example` use:
-- **OpenAI** model `gpt-4o-mini` (override via `OPENAI_MODEL`)
-- **Pinecone** serverless on `aws / us-east-1` (override via `PINECONE_*`)
-- **HuggingFace** local embeddings `all-MiniLM-L6-v2` (384-dim, no API key)
-
-### 3. Initialise the SQLite dynamic store
+### 3. Initialise database and vector store
 
 ```bash
-python -m src.db
+python3 -m src.db                     # seed SQLite
+python3 -m src.ingest                 # populate Pinecone
 ```
 
-### 4. Ingest the static knowledge base into Pinecone
+---
+
+## Running
+
+### User chatbot (CLI)
 
 ```bash
-python -m src.ingest                  # incremental upsert
-python -m src.ingest --recreate       # drop & recreate the index
+python3 -m src.cli
 ```
 
-### 5. Chat
+```
+you > I'd like to reserve a spot
+bot > Sure! I'll need your first name, last name, license plate, and ...
+you > John Doe, ABC-1234, April 20 9am to 6pm
+bot > Reservation #1 staged as PENDING. The administrator has been notified.
+you > What's the status of reservation 1?
+bot > Reservation #1: PENDING — awaiting admin review.
+```
+
+### Admin dashboard (web)
 
 ```bash
-python -m src.cli
+python3 -m src.server
+```
+
+Open **http://localhost:8000/admin** in your browser. The dashboard shows:
+- **Pending reservations** with Approve / Reject buttons
+- **All reservations** with status badges
+- **Admin AI assistant** chat for natural-language review
+
+### Admin CLI
+
+```bash
+python3 -m src.admin_cli
 ```
 
 ```
-SkyPark Central — Parking Chatbot (Stage 1)
-Type your question, or '/quit' to exit, '/new' for a new conversation.
-
-you > Where is the garage and is it open at night?
-bot > SkyPark Central is at 120 Harbor Avenue, Rivertown ... and yes, it's open 24/7.
-you > How many spaces are free on L3 right now?
-bot > L3 currently has 59 of 100 spaces free.
-you > I'd like to book a spot
-bot > Sure — could I have your first and last name, license plate, and the start/end of your reservation?
+admin > /pending
+  #1 | John Doe | ABC-1234 | 2026-04-20T09:00 -> 2026-04-20T18:00
+admin > /approve 1
+  Notes (optional): looks good
+  Reservation #1 CONFIRMED.
+admin > Should I approve reservation #2? Check availability first.
+assistant > Let me check... L1 has 38 free spaces. The reservation looks
+            feasible. I recommend approving it.
 ```
+
+### REST API
+
+```bash
+# List pending bookings
+curl http://localhost:8000/api/admin/bookings?status=pending
+
+# Approve a booking
+curl -X POST http://localhost:8000/api/admin/bookings/1/approve \
+  -H 'Content-Type: application/json' \
+  -d '{"notes": "approved"}'
+
+# Reject a booking
+curl -X POST http://localhost:8000/api/admin/bookings/1/reject \
+  -H 'Content-Type: application/json' \
+  -d '{"reason": "garage full on that date"}'
+
+# User checks status
+curl http://localhost:8000/api/booking/1
+
+# Chat with admin agent
+curl -X POST http://localhost:8000/api/admin/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "show me all pending reservations and check availability"}'
+```
+
+---
+
+## Stage 2: Human-in-the-Loop flow
+
+### How it works
+
+1. **User creates a reservation** via the chatbot (CLI or `/api/chat`).
+2. The chatbot inserts a row with `status='pending'` into SQLite.
+3. `notifications.py` fires:
+   - Always: an **in-app notification** (visible in dashboard + admin CLI).
+   - Optionally: an **SMTP email** to the admin (if `SMTP_*` env vars are set).
+4. The **admin** reviews the reservation via:
+   - The **web dashboard** (`/admin`) — click Approve or Reject.
+   - The **admin CLI** (`python3 -m src.admin_cli`) — `/approve ID` or `/reject ID`.
+   - The **REST API** — `POST /api/admin/bookings/{id}/approve` or `/reject`.
+   - The **admin AI agent** — natural-language instruction like
+     "approve reservation 1" (the agent checks availability and recommends).
+5. On approval/rejection, a notification is generated (in-app + email).
+6. The **user** can check status via the chatbot ("what's the status of
+   reservation 1?") or `GET /api/booking/{id}`.
+
+### Email notifications (optional)
+
+To enable email, add SMTP settings to `.env`:
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+ADMIN_EMAIL=admin@skypark-central.example
+```
+
+For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833).
+If SMTP is not configured, the system works fine — notifications are in-app only.
 
 ---
 
 ## Guardrails
 
-`src/guardrails.py` runs at the chatbot boundary on **every** turn:
-
-- **Input**:
-  - Blocks empty messages.
-  - Blocks obvious prompt-injection patterns
-    (`ignore previous instructions`, `reveal system prompt`, …).
-  - Redacts emails, phone numbers, SSNs, credit-card numbers, IBANs, JWTs,
-    and common API-key shapes (`sk-…`, `AKIA…`, `ghp_…`).
-  - Flags secret-related keywords (`password`, `api key`, …).
-- **Output**:
-  - Same redaction pass on the model reply, so any sensitive text that may
-    have crept into the vector DB (or that the model invented) cannot reach
-    the user.
-
-The choice of regex-first detection is deliberate for Stage 1: it has no
-extra dependencies, is fully transparent, and errs on over-redaction. For
-production the same interface can be backed by Microsoft Presidio or a
-similar NLP-based PII detector — the call sites in `chatbot.py` will not
-need to change.
-
-Run the smoke tests:
+See Stage 1 docs above. Guardrails apply to the user chatbot only (the admin
+agent is an internal tool, not user-facing).
 
 ```bash
-pip install pytest
-pytest tests/
+python3 -m pytest tests/
 ```
 
 ---
 
 ## Evaluation
 
-`eval/questions.json` is a hand-labelled set of 18 user questions, each
-tagged with the **gold topics** (markdown topics that should be retrieved).
-`eval/evaluate.py` computes:
-
-| Metric | Definition |
-|---|---|
-| **Recall@K**    | Fraction of questions for which ≥ 1 retrieved chunk is from a gold topic. |
-| **Precision@K** | Average per-question fraction of retrieved chunks whose topic is gold. |
-| **MRR@K**       | Mean reciprocal rank of the first gold-topic chunk. |
-| **Retrieval latency** | p50 / p95 / mean wall-clock per `retriever.invoke()` call. |
-| **End-to-end latency** | p50 / p95 / mean wall-clock per full `chat()` call (with `--end-to-end`). |
-
-Run it:
-
 ```bash
-python -m eval.evaluate                   # retrieval-only (cheap, no LLM calls)
-python -m eval.evaluate --end-to-end      # also time full chatbot turns
-python -m eval.evaluate --k 6             # change top-k
+python3 -m eval.evaluate                   # retrieval-only
+python3 -m eval.evaluate --end-to-end      # full chatbot turns
 ```
-
-The harness writes `eval/results/report.md` (human-readable) and
-`eval/results/report.json` (machine-readable). The retrieval-only run uses
-no OpenAI credits; only `--end-to-end` calls the LLM.
-
----
-
-## Reservation flow (Stage 1 scope)
-
-The agent collects four fields — first name, last name, license plate, and
-start/end timestamps — and inserts a booking row with `status='pending'`.
-The actual **human-in-the-loop confirmation** (an admin reviewing and
-flipping the status to `confirmed`) is the subject of **Stage 2** and is
-intentionally not implemented here. No payment information is ever
-requested or stored.
-
-You can inspect staged bookings any time:
-
-```bash
-python -c "from src.db import list_bookings; import json; print(json.dumps(list_bookings(), indent=2))"
-```
-
----
-
-## What's intentionally NOT in Stage 1
-
-- Human-in-the-loop reservation approval workflow (Stage 2)
-- A web/HTTP frontend (Stage 3)
-- Payment processing (out of scope for the entire project)
 
 ---
 

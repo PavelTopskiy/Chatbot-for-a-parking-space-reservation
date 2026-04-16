@@ -32,5 +32,13 @@ class Settings:
 
     top_k: int = int(os.getenv("TOP_K", "4"))
 
+    # SMTP (optional — for email notifications)
+    smtp_host: str = os.getenv("SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_pass: str = os.getenv("SMTP_PASS", "")
+    smtp_from: str = os.getenv("SMTP_FROM", "")
+    admin_email: str = os.getenv("ADMIN_EMAIL", "admin@skypark-central.example")
+
 
 settings = Settings()
