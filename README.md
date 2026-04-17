@@ -1,4 +1,4 @@
-# Parking Chatbot — Stage 1 + Stage 2 + Stage 3
+# Parking Chatbot — Stages 1–4
 
 A Retrieval-Augmented Generation (RAG) chatbot for the fictional **SkyPark
 Central** parking facility. Built with **LangChain**, **LangGraph**,
@@ -8,6 +8,9 @@ Central** parking facility. Built with **LangChain**, **LangGraph**,
 - **Stage 2** — Human-in-the-loop reservation approval with admin agent,
   REST API, dashboard, and email notifications
 - **Stage 3** — MCP server that writes confirmed reservations to a file
+- **Stage 4** — Unified LangGraph orchestrator (`user_node` → `approval_node`
+  with `interrupt` → `recording_node`) plus load-testing harness and full
+  architecture documentation in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
 ---
 
@@ -85,12 +88,20 @@ Central** parking facility. Built with **LangChain**, **LangGraph**,
 │   ├── server.py                # FastAPI: REST API + admin dashboard
 │   ├── reservation_writer.py    # Pure file-write logic (no external deps)
 │   ├── mcp_server.py            # MCP server (JSON-RPC, port 8001, bearer auth)
-│   └── mcp_client.py            # Sync MCP client used by approval paths
+│   ├── mcp_client.py            # Sync MCP client used by approval paths
+│   ├── orchestrator.py          # Stage 4 — LangGraph StateGraph for the pipeline
+│   └── orchestrator_cli.py      # Stage 4 — single-process demo
+├── scripts/
+│   └── load_test.py             # Stage 4 — load harness (db / mcp / orch / all)
+├── docs/
+│   └── ARCHITECTURE.md          # Stage 4 — full architecture + ops reference
 ├── eval/
 │   ├── questions.json           # gold QA set with topic labels
 │   └── evaluate.py              # Recall@K, Precision@K, MRR, latency
 ├── tests/
-│   └── test_guardrails.py
+│   ├── test_guardrails.py
+│   ├── test_mcp_server.py
+│   └── test_orchestrator.py
 ├── requirements.txt
 └── .env.example
 ```
@@ -331,6 +342,92 @@ After approval, check the output file:
 ```bash
 cat data/confirmed_reservations.txt
 ```
+
+---
+
+## Stage 4: Orchestration via LangGraph
+
+Stage 4 ties the three prior stages into a single LangGraph `StateGraph`
+with a native human-in-the-loop boundary (`interrupt` + `Command`).
+
+### Graph
+
+```
+ START ─▶ user_node ──(reservation staged?)──▶ approval_node ──(interrupt)──▶
+          │                                                              │
+          └──▶ END                                                       ▼
+                                                              decision_node
+                                                                     │
+                                                   (confirmed?) ─────┤
+                                                                     │
+                                                              recording_node
+                                                                     │
+                                                                    END
+```
+
+- **`user_node`** — runs the Stage 1 chatbot agent; detects a newly staged
+  booking by diffing pending IDs before/after the call.
+- **`approval_node`** — calls `interrupt(payload)` to pause; resumes when
+  the caller sends `Command(resume={"action": "approve"|"reject", "notes": ...})`.
+- **`decision_node`** — applies the decision via `db.approve_booking` /
+  `db.reject_booking`.
+- **`recording_node`** — calls `mcp_client.write_confirmed_reservation`;
+  errors are caught so the graph always completes.
+
+### Single-process demo
+
+```bash
+# (make sure MCP server is running if you want actual file writes)
+python3 -m src.mcp_server &
+
+python3 -m src.orchestrator_cli
+```
+
+Example session:
+
+```
+you > I'd like to reserve a spot. John Doe, ABC-1234, April 20 9am to 6pm.
+bot > Reservation #1 staged as PENDING. ...
+
+============================================================
+ADMIN APPROVAL REQUIRED
+  #1 — John Doe
+  plate : ABC-1234
+  period: 2026-04-20T09:00  →  2026-04-20T18:00
+============================================================
+admin action [approve/reject] > approve
+notes (optional) > looks good
+
+  final status : confirmed
+  mcp result   : OK: wrote booking #1 to data/confirmed_reservations.txt
+```
+
+### Tests
+
+```bash
+python3 -m pytest tests/test_orchestrator.py -v
+```
+
+Six integration tests cover:
+- no-reservation turn → no interrupt
+- reservation turn → interrupt with correct payload
+- approve → booking confirmed + MCP called
+- reject → booking rejected + MCP **not** called
+- MCP failure → graph still completes, booking stays confirmed
+- concurrent `thread_id`s isolated by the checkpointer
+
+### Load tests
+
+```bash
+python3 -m scripts.load_test db     # concurrent SQLite approvals
+python3 -m scripts.load_test mcp    # parallel MCP writes (server must be running)
+python3 -m scripts.load_test orch   # parallel orchestrator threads
+python3 -m scripts.load_test all    # all three
+```
+
+Each scenario prints p50 / p95 / p99 / max latency and throughput.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full
+architecture reference.
 
 ---
 
