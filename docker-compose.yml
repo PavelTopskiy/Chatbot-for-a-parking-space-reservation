@@ -1,0 +1,108 @@
+# Local orchestration for the SkyPark stack.
+#
+# Brings up the two long-running services that together expose the full
+# product surface:
+#
+#   - dashboard   : user chatbot API + admin dashboard (FastAPI)  :8000
+#   - mcp-server  : confirmed-reservation file writer (JSON-RPC)  :8001
+#
+# Both share a single ./data volume so the dashboard's SQLite DB
+# (data/dynamic/parking.db) and the MCP writer's output file
+# (data/confirmed_reservations.txt) stay on the host.
+#
+# Usage:
+#   cp .env.example .env          # fill in OPENAI_API_KEY, PINECONE_*, MCP_SECRET
+#   docker compose up --build
+#   # one-shot ingest into Pinecone (runs, populates index, exits):
+#   docker compose run --rm ingest
+#
+# For a full end-to-end CLI demo inside the stack:
+#   docker compose run --rm orchestrator-cli
+
+services:
+  dashboard:
+    build: .
+    image: skypark:latest
+    container_name: skypark-dashboard
+    env_file: .env
+    # Override so the dashboard reaches the MCP server via the compose
+    # network DNS name instead of localhost.
+    environment:
+      MCP_URL: http://mcp-server:8001/mcp
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    command:
+      - python
+      - -m
+      - uvicorn
+      - src.server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      mcp-server:
+        condition: service_started
+    restart: unless-stopped
+
+  mcp-server:
+    build: .
+    image: skypark:latest
+    container_name: skypark-mcp
+    env_file: .env
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+    command:
+      - python
+      - -m
+      - uvicorn
+      - src.mcp_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    restart: unless-stopped
+
+  # One-shot jobs. Use:  docker compose run --rm <name>
+  ingest:
+    build: .
+    image: skypark:latest
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    profiles: ["tools"]
+    command: ["python", "-m", "src.ingest"]
+
+  orchestrator-cli:
+    build: .
+    image: skypark:latest
+    env_file: .env
+    environment:
+      MCP_URL: http://mcp-server:8001/mcp
+    volumes:
+      - ./data:/app/data
+    profiles: ["tools"]
+    stdin_open: true
+    tty: true
+    command: ["python", "-m", "src.orchestrator_cli"]
+
+  tests:
+    build: .
+    image: skypark:latest
+    environment:
+      OPENAI_API_KEY: test-dummy
+      PINECONE_API_KEY: test-dummy
+      PINECONE_INDEX_NAME: test-index
+      MCP_SECRET: test-secret
+    profiles: ["tools"]
+    command: ["python", "-m", "pytest", "-q"]
