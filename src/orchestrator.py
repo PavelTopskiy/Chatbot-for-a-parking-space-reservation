@@ -101,9 +101,16 @@ def user_node(state: OrchestratorState) -> dict:
     reply = result.get("reply") or ""
     update: dict[str, Any] = {"assistant_reply": reply}
 
-    match = _RESERVATION_ID_RE.search(reply)
-    if match:
-        booking_id = int(match.group(1))
+    # Prefer the authoritative tool-output-derived ID from chat(); fall
+    # back to regexing the final reply for backward compatibility with
+    # test stubs that only set ``reply``.
+    booking_id = result.get("staged_booking_id")
+    if not booking_id:
+        match = _RESERVATION_ID_RE.search(reply)
+        if match:
+            booking_id = int(match.group(1))
+
+    if booking_id:
         booking = db.get_booking(booking_id)
         if booking and booking.get("status") == "pending":
             update["booking_id"] = booking_id

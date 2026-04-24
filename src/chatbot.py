@@ -15,11 +15,12 @@ final assistant reply before returning it to the caller.
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
@@ -255,10 +256,22 @@ def chat(message: str, thread_id: str = "default") -> dict[str, Any]:
             b.get("text", "") if isinstance(b, dict) else str(b) for b in final
         )
 
+    # Scan tool outputs for a staged-booking signal. The LLM may paraphrase
+    # the tool result in ``final``, so regexing the reply is unreliable;
+    # inspecting ToolMessage content is authoritative.
+    staged_booking_id: Optional[int] = None
+    for msg in result.get("messages", []):
+        if isinstance(msg, ToolMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            m = re.search(r"Reservation\s+#(\d+)\s+staged as PENDING", content)
+            if m:
+                staged_booking_id = int(m.group(1))
+
     out_guard = sanitize_output(final)
     return {
         "reply": out_guard.text,
         "input_findings": in_guard.findings,
         "output_findings": out_guard.findings,
         "blocked": False,
+        "staged_booking_id": staged_booking_id,
     }
